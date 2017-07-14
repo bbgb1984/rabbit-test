@@ -1,0 +1,123 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:context="http://www.springframework.org/schema/context"
+	xmlns:aop="http://www.springframework.org/schema/aop" xmlns:tx="http://www.springframework.org/schema/tx"
+	xmlns:mvc="http://www.springframework.org/schema/mvc" xmlns:rabbit="http://www.qbao.com/schema/rabbit"
+	xsi:schemaLocation="
+        http://www.springframework.org/schema/beans 
+        http://www.springframework.org/schema/beans/spring-beans-3.2.xsd 
+        http://www.springframework.org/schema/context 
+        http://www.springframework.org/schema/context/spring-context-3.2.xsd
+        http://www.qbao.com/schema/rabbit
+ 		http://www.qbao.com/schema/rabbit/qbao-rabbit-1.0.xsd">
+	<context:annotation-config/> 
+	<context:component-scan base-package="com.qbao.**" />
+	
+	<!-- 创建线程池 -->
+	<bean id="taskExecutor"
+		class="org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor">
+		<!-- 线程池活跃的线程数 -->
+		<property name="corePoolSize" value="${rabbitmq.corePoolSize}" />
+		<!-- 线程池最大活跃的线程数 -->
+		<property name="maxPoolSize" value="${rabbitmq.maxPoolSize}" />
+		<!-- 队列的最大容量 -->
+		<property name="queueCapacity" value="${rabbitmq.queueCapacity}" />
+	</bean>
+	<!-- rabbit mq池 -->
+	<bean id="rabbitConnectionFactory" class="com.rabbitmq.client.ConnectionFactory">
+		<property name="host" value="${rabbitmq.host}" />
+		<property name="port" value="${rabbitmq.port}" />
+		<property name="username" value="${rabbitmq.username}" />
+		<property name="password" value="${rabbitmq.password}" />
+		<!-- 虚拟机名字 <property name="virtualHost" value="${rabbitmq.vhost}" /> -->
+		<property name="connectionTimeout" value="${rabbitmq.connectionTimeout}" />
+	</bean>
+
+
+	
+	<bean id="configLoader"
+		class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="locations">
+			<list>
+				<value>classpath:rabbitmq.properties</value>
+			</list>
+		</property>
+	</bean>
+	
+	<!-- rabbit 工厂 -->
+	<bean id="rabbitConnFactory"
+		class="org.springframework.amqp.rabbit.connection.CachingConnectionFactory">
+		<constructor-arg ref="rabbitConnectionFactory" />
+		<property name="channelCacheSize" value="25" />
+		<property name="executor" ref="taskExecutor" />
+		<property name="publisherConfirms" value="true" />
+		<property name="publisherReturns" value="true" />
+	</bean>
+	<!-- admin 消息的创建，路由的管理 <rabbit:admin connection-factory="rabbitConnFactory" 
+		id="rabbitAdmin" /> -->
+<rabbit:admin connection-factory="rabbitConnFactory" 
+		id="rabbitAdmin" />
+	<!-- 生产者 start -->
+	<!-- spring amqp默认的是jackson 的一个插件,目的将生产者生产的数据转换为json存入消息队列， 由于fastjson的速度快于jackson,这里替换为fastjson的一个实现 -->
+	<bean id="jsonMessageConverter" class="com.qbao.FastJsonMessageConverter"></bean>
+
+	<rabbit:template id="testMqTemplate" exchange="account.test.exchange2" routing-key="test.user.a"
+		reply-timeout="1800" encoding="utf-8" connection-factory="rabbitConnFactory"
+		message-converter="jsonMessageConverter" channel-transacted="false" />
+
+	<rabbit:qbao-template id="testMqTemplate2" exchange="myexchange" exchange-type="direct" queue="my.queue"
+		reply-timeout="1800" encoding="utf-8" connection-factory="rabbitConnFactory"
+		message-converter="jsonMessageConverter" channel-transacted="false" />
+
+	<rabbit:qbao-template id="testMqTemplate3" exchange="myfanoutexchange4" exchange-type="fanout"
+		reply-timeout="1800"  queue="my.fanout.queue4"
+		encoding="utf-8" connection-factory="rabbitConnFactory"
+		message-converter="jsonMessageConverter" channel-transacted="false" />
+
+	<rabbit:qbao-template id="testMqTemplate4" exchange="mytopictexchange" exchange-type="topic" queue="my.topic.queue"
+		reply-timeout="1800" encoding="utf-8" connection-factory="rabbitConnFactory"
+		message-converter="jsonMessageConverter" channel-transacted="false" />
+
+	<rabbit:qbao-template id="testMqTemplate5" exchange="myheaderstexchange" exchange-type="headers" queue="my.headers.queue"
+		key="header_key" value="header_value"
+		reply-timeout="1800" encoding="utf-8" connection-factory="rabbitConnFactory"
+		message-converter="jsonMessageConverter" channel-transacted="false" />
+
+	<rabbit:qbao-template id="testMqTemplate6" exchange="mydirectexchange" queue="my.direct.queue"
+		reply-timeout="1800" encoding="utf-8" connection-factory="rabbitConnFactory"
+		message-converter="jsonMessageConverter" channel-transacted="false" />
+	<!-- 回滚路由 这里需要规范，具体内容还需要确认 -->
+	<rabbit:topic-exchange name="account.test.exchange2">
+		<rabbit:bindings>
+			<rabbit:binding queue="account.test.queue" pattern="test.user.#"></rabbit:binding>
+			<rabbit:binding queue="account.test.queue1" pattern="test.user.*"></rabbit:binding>
+			<rabbit:binding queue="account.test.queue2" pattern="test2.user.#"></rabbit:binding>
+		</rabbit:bindings>
+	</rabbit:topic-exchange>
+	<!-- 生产者 end -->
+	<rabbit:queue id="accountTestQueue" name="account.test.queue" />
+	<rabbit:queue id="accountTestQueue1" name="account.test.queue1" />
+	<rabbit:queue id="accountTestQueue2" name="account.test.queue2" />
+
+	<rabbit:listener-container
+		connection-factory="rabbitConnFactory" acknowledge="auto" prefetch="10"
+		message-converter="jsonMessageConverter" task-executor="taskExecutor">
+		<rabbit:listener queues="account.test.queue2" ref="testAccountMessageListener" />
+		<rabbit:listener queues="account.test.queue" ref="testAccountMessageListener" />
+		<rabbit:listener queues="my.fanout.queue4" ref="testAccountMessageListener" />
+		<rabbit:listener queues="my.queue" ref="testAccountMessageListener" />
+		<rabbit:listener queues="my.topic.queue" ref="testAccountMessageListener" />
+		<rabbit:listener queues="my.direct.queue" ref="testAccountMessageListener" />
+	</rabbit:listener-container>
+	<!-- 消费者 end -->
+	
+<!-- jsp视图解析器 -->
+	<bean id="jspViewResolver"
+		class="org.springframework.web.servlet.view.InternalResourceViewResolver">
+		<property name="viewClass"
+			value="org.springframework.web.servlet.view.JstlView" />
+		<property name="prefix" value="/page/" />
+		<property name="suffix" value=".jsp" />
+	</bean>
+
+</beans>
